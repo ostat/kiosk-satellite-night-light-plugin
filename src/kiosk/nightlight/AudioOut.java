@@ -9,7 +9,7 @@ import android.media.AudioTrack;
  * Streams the lullaby to the media volume on its own thread while the night light shows. It reads the settings and
  * the session itself every 50 ms, so the music follows the timeline without any timers.
  */
-final class AudioOut implements Runnable {
+final class AudioOut implements Runnable, Sound {
     interface Source {
         Config config();
         long elapsed();
@@ -23,6 +23,9 @@ final class AudioOut implements Runnable {
     private final Source source;
     private volatile boolean running = true;
     private volatile long stopRequested;
+    private final long startedAt = System.nanoTime();
+    /** The fade gain heard when stop() came, so a stop during the fade in fades out from there. */
+    private volatile double gainAtStop = 1;
     private final Thread thread;
 
     AudioOut(Source source) {
@@ -36,20 +39,22 @@ final class AudioOut implements Runnable {
         thread.start();
     }
 
-    /** Fades out over about a second, then releases the speaker. */
-    void stop() {
+    /** Fades out over the Sound fade setting (about a second when it is 0), then releases the speaker. */
+    @Override public void stop() {
         if (!running) return;
-        stopRequested = System.nanoTime();
+        long now = System.nanoTime();
+        gainAtStop = fadeGain(now - startedAt, -1, fadeNs(source.config()), 1);
+        stopRequested = now;
         running = false;
     }
 
     /** Stops right away, for plugin shutdown. */
-    void stopNow() {
+    @Override public void stopNow() {
         stop();
         thread.interrupt();
     }
 
-    boolean alive() {
+    @Override public boolean alive() {
         return running && thread.isAlive();
     }
 
@@ -96,6 +101,27 @@ final class AudioOut implements Runnable {
         synth.setLevels(level, sound.music() ? 1 : 0, sound == Config.Sound.WAVES ? 1 : 0, sound.noise() ? 1 : 0, tempo);
     }
 
+    static long fadeNs(Config c) {
+        return Math.round(c.soundFade * 1e9);
+    }
+
+    /**
+     * The gain of the sound fade, from 0 to 1. sinceStart is how long the sound has played; sinceStop is how long
+     * ago stop() came, or negative while it plays. The curve is eased and squared, so the level grows and falls
+     * evenly to the ear. A fade of 0 gives 1 while playing and 0 once stopped.
+     */
+    static double fadeGain(long sinceStart, long sinceStop, long fade, double atStop) {
+        if (fade <= 0) return sinceStop < 0 ? 1 : 0;
+        if (sinceStop < 0) return ease((double) sinceStart / fade);
+        return atStop * ease(1 - (double) sinceStop / fade);
+    }
+
+    private static double ease(double t) {
+        t = Math.max(0, Math.min(1, t));
+        double s = t * t * (3 - 2 * t);
+        return s * s;
+    }
+
     /** True while a synth is heard or on its way in or out. */
     private static boolean audible(LullabySynth synth, double level) {
         return level > 1e-4 || synth.currentMaster() > 1e-4;
@@ -114,14 +140,17 @@ final class AudioOut implements Runnable {
             Config c = source.config();
             Scene.mix(c, source.elapsed(), source.fade(), mix);
             boolean stopping = !running;
-            double sootherLevel = stopping ? 0 : mix.soother;
-            double nightLevel = stopping ? 0 : mix.night;
+            long now = System.nanoTime();
+            long fade = fadeNs(c);
+            double gain = fadeGain(now - startedAt, stopping ? now - stopRequested : -1, fade, gainAtStop);
+            double sootherLevel = mix.soother * gain;
+            double nightLevel = mix.night * gain;
             play(soother, c.sound, sootherLevel, mix.tempo);
             play(night, c.nightSound, nightLevel, Scene.NIGHT_TEMPO);
             boolean sootherOn = audible(soother, sootherLevel);
             boolean nightOn = audible(night, nightLevel);
 
-            if (stopping && ((!sootherOn && !nightOn) || System.nanoTime() - stopRequested > STOP_FADE_NS)) return;
+            if (stopping && ((gain <= 0 && !sootherOn && !nightOn) || now - stopRequested > fade + STOP_FADE_NS)) return;
             if (!sootherOn && !nightOn) {
                 // Nothing to hear, for example a silent night light: rest the speaker and check again shortly.
                 if (playing) { track.pause(); track.flush(); playing = false; }

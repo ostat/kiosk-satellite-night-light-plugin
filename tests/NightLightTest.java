@@ -18,6 +18,10 @@ public final class NightLightTest {
         stars();
         synth();
         plugin();
+        audioOnly();
+        soundEntity();
+        volumeEntity();
+        soundFade();
         System.out.println("NightLightTest passed");
     }
 
@@ -427,6 +431,184 @@ public final class NightLightTest {
         plugin.stop();
     }
 
+    /** A stand-in for the speaker: the JVM's Android stubs cannot make an AudioTrack. */
+    static final class FakeSound implements Sound {
+        boolean stopped;
+        @Override public void stop() { stopped = true; }
+        @Override public void stopNow() { stopped = true; }
+        @Override public boolean alive() { return !stopped; }
+    }
+
+    static NightLightPlugin soundPlugin(FakeHost host, List<FakeSound> made, Map<String, Object> settings) {
+        NightLightPlugin plugin = new NightLightPlugin(() -> 5_000_000L);
+        plugin.endGraceMs = 0;
+        plugin.soundFactory = source -> { FakeSound f = new FakeSound(); made.add(f); return f; };
+        plugin.start(host, settings);
+        return plugin;
+    }
+
+    /** Waits for the screensaver's grace timer, which runs at once in tests. */
+    static void settle(NightLightPlugin plugin) {
+        for (int i = 0; i < 200 && plugin.endPending(); i++) {
+            try { Thread.sleep(5); } catch (InterruptedException e) { throw new AssertionError(e); }
+        }
+        check(!plugin.endPending(), "the grace timer ran");
+    }
+
+    static void audioOnly() {
+        Config d = new Config(Collections.emptyMap());
+        check(!d.keepSound, "keep sound is off by default");
+        check(new Config(Collections.singletonMap("keepSound", true)).keepSound, "keep sound parses");
+
+        FakeHost host = new FakeHost();
+        List<FakeSound> made = new ArrayList<>();
+        NightLightPlugin plugin = soundPlugin(host, made, Collections.emptyMap());
+        plugin.execute("startSound", Collections.emptyMap());
+        check(made.size() == 1 && plugin.audioRunning(), "play sound starts the speaker");
+        check(NightLightPlugin.SOUND_ONLY.equals(host.status), "status says the sound plays: " + host.status);
+        check(host.commands.isEmpty(), "play sound needs no screensaver: " + host.commands);
+        plugin.execute("startSound", Collections.emptyMap());
+        check(made.size() == 1, "play sound twice keeps one speaker");
+        plugin.execute("stopSound", Collections.emptyMap());
+        check(made.get(0).stopped && !plugin.audioRunning(), "stop sound stops it");
+
+        plugin.execute("startSound", Collections.emptyMap());
+        plugin.viewShown();
+        check(made.size() == 2, "the screensaver reuses the playing speaker");
+        plugin.viewGone();
+        settle(plugin);
+        check(plugin.audioRunning(), "a sound started by the action outlives the screensaver");
+        plugin.execute("stopNightLight", Collections.emptyMap());
+        check(made.get(1).stopped && !plugin.audioRunning(), "close stops a playing sound");
+        check(NightLightPlugin.READY.equals(host.status), "and the status says so: " + host.status);
+        plugin.stop();
+
+        made.clear();
+        host = new FakeHost();
+        plugin = soundPlugin(host, made, Collections.emptyMap());
+        plugin.viewShown();
+        check(made.size() == 1, "the screensaver starts the speaker");
+        plugin.viewGone();
+        settle(plugin);
+        check(made.get(0).stopped && !plugin.audioRunning(), "without keep sound, closing stops it");
+        plugin.stop();
+
+        made.clear();
+        host = new FakeHost();
+        plugin = soundPlugin(host, made, Collections.singletonMap("keepSound", true));
+        plugin.viewShown();
+        plugin.viewGone();
+        settle(plugin);
+        check(!made.get(0).stopped && plugin.audioRunning(), "with keep sound, closing leaves it playing");
+        plugin.viewShown();
+        check(made.size() == 1, "and the screensaver picks it up again");
+        plugin.viewGone();
+        settle(plugin);
+        plugin.execute("stopSound", Collections.emptyMap());
+        check(made.get(0).stopped && !plugin.audioRunning(), "stop sound ends a kept sound");
+        plugin.execute("startSound", Collections.emptyMap());
+        plugin.stop();
+        check(made.get(1).stopped, "stopping the plugin stops the sound");
+    }
+
+    static Object lastSaved(FakeHost host, String key) {
+        for (int i = host.updates.size() - 1; i >= 0; i--) if (host.updates.get(i).containsKey(key)) return host.updates.get(i).get(key);
+        return null;
+    }
+
+    static void soundEntity() {
+        Config d = new Config(Collections.emptyMap());
+        check(!d.resumeSound && !d.soundOn, "resume and sound on are off by default");
+
+        FakeHost host = new FakeHost();
+        List<FakeSound> made = new ArrayList<>();
+        NightLightPlugin plugin = soundPlugin(host, made, Collections.emptyMap());
+        check(Boolean.FALSE.equals(host.switches.get("sound")), "publishes the sound switch, off: " + host.switches);
+        plugin.onEvent("switch.sound", Collections.singletonMap("on", true));
+        check(plugin.audioRunning() && Boolean.TRUE.equals(host.switches.get("sound")), "the switch plays the sound and reports it");
+        check(Boolean.TRUE.equals(lastSaved(host, "soundOn")), "and remembers it for a restart");
+        plugin.onEvent("switch.sound", Collections.singletonMap("on", false));
+        check(!plugin.audioRunning() && Boolean.FALSE.equals(host.switches.get("sound")), "the switch stops it");
+        check(Boolean.FALSE.equals(lastSaved(host, "soundOn")), "and forgets it");
+        plugin.execute("startSound", Collections.emptyMap());
+        check(Boolean.TRUE.equals(host.switches.get("sound")), "the action updates the switch too");
+        plugin.execute("stopNightLight", Collections.emptyMap());
+        check(Boolean.FALSE.equals(host.switches.get("sound")), "and Close does too");
+        plugin.viewShown();
+        check(Boolean.TRUE.equals(host.switches.get("sound")), "the screensaver's sound shows on the switch");
+        plugin.viewGone();
+        settle(plugin);
+        check(Boolean.FALSE.equals(host.switches.get("sound")), "and ends with it");
+        check(!Boolean.TRUE.equals(lastSaved(host, "soundOn")), "the screensaver's own sound is not resumed");
+        plugin.stop();
+
+        Map<String, Object> resume = new HashMap<>();
+        resume.put("resumeSound", true);
+        resume.put("soundOn", true);
+        made.clear();
+        host = new FakeHost();
+        plugin = soundPlugin(host, made, resume);
+        check(plugin.audioRunning() && Boolean.TRUE.equals(host.switches.get("sound")), "a restart resumes the sound");
+        plugin.stop();
+
+        resume.put("resumeSound", false);
+        made.clear();
+        host = new FakeHost();
+        plugin = soundPlugin(host, made, resume);
+        check(!plugin.audioRunning(), "without resume, a restart stays quiet");
+        check(Boolean.FALSE.equals(lastSaved(host, "soundOn")), "and saves the sound as off");
+        Map<String, Object> off = new HashMap<>(resume);
+        off.put("soundOn", false);
+        plugin.configure(off);
+        check(!plugin.audioRunning(), "configure with an unchanged sound on does nothing");
+        Map<String, Object> on = new HashMap<>(resume);
+        plugin.configure(on);
+        check(plugin.audioRunning(), "turning sound on in settings plays it");
+        plugin.configure(off);
+        check(!plugin.audioRunning(), "and turning it off stops it");
+        plugin.stop();
+
+        made.clear();
+        host = new FakeHost();
+        host.noEntities = true;
+        plugin = soundPlugin(host, made, Collections.emptyMap());
+        plugin.execute("startSound", Collections.emptyMap());
+        check(plugin.audioRunning(), "an older KS without entities still plays the sound");
+        plugin.stop();
+    }
+
+    static void volumeEntity() {
+        check(NightLightPlugin.volumePercent(57.4) == 55 && NightLightPlugin.volumePercent(58) == 60, "volume snaps to the step");
+        check(NightLightPlugin.volumePercent(-3) == 0 && NightLightPlugin.volumePercent(250) == 100, "volume stays in range");
+
+        FakeHost host = new FakeHost();
+        List<FakeSound> made = new ArrayList<>();
+        NightLightPlugin plugin = soundPlugin(host, made, Collections.singletonMap("nightVolume", 60));
+        check(Double.valueOf(60).equals(host.numbers.get("volume")), "publishes the night light volume: " + host.numbers);
+        Map<String, Object> meta = host.numberMeta.get("volume");
+        check(meta != null && Integer.valueOf(5).equals(meta.get("step")) && "slider".equals(meta.get("mode")), "as a slider in steps of 5: " + meta);
+        plugin.onEvent("number.volume", Collections.singletonMap("value", 72.3));
+        check(Double.valueOf(70).equals(host.numbers.get("volume")), "Home Assistant's value is applied on the step: " + host.numbers);
+        check(Math.abs(plugin.config().nightVolume - 0.70) < 1e-9, "and the sound uses it at once");
+        check(Integer.valueOf(70).equals(lastSaved(host, "nightVolume")), "and it is saved for a restart");
+        plugin.onEvent("number.volume", Collections.singletonMap("value", "loud"));
+        check(Double.valueOf(70).equals(host.numbers.get("volume")), "a value that is not a number is ignored");
+        Map<String, Object> changed = new HashMap<>();
+        changed.put("nightVolume", 35);
+        plugin.configure(changed);
+        check(Double.valueOf(35).equals(host.numbers.get("volume")), "a change in settings shows in Home Assistant");
+        plugin.onEvent("number.volume", Collections.singletonMap("value", 40));
+        check(plugin.config().nightVolume == 0.40 && plugin.config().nightSound == Config.Sound.NONE, "a slider change keeps the other settings");
+        plugin.stop();
+
+        host = new FakeHost();
+        host.noNumbers = true;
+        plugin = soundPlugin(host, made, Collections.emptyMap());
+        plugin.execute("startSound", Collections.emptyMap());
+        check(plugin.audioRunning() && Boolean.TRUE.equals(host.switches.get("sound")), "a KS without numbers still plays and keeps the switch");
+        plugin.stop();
+    }
+
     static final class FakeHost implements PluginHost {
         final List<String> commands = new ArrayList<>();
         final Map<String, Map<String, Object>> lastArgs = new HashMap<>();
@@ -450,10 +632,58 @@ public final class NightLightTest {
             this.touch = touch;
         }
         @Override public void removeScreensaver(String key) {}
-        @Override public void status(String message, boolean error) {}
+        @Override public void publishSwitch(String key, String name, boolean state) {
+            if (noEntities) throw new UnsupportedOperationException("SDK 1 required");
+            switches.put(key, state);
+        }
+        @Override public void publishNumber(String key, String name, Map<String, Object> metadata, Double state) {
+            if (noEntities || noNumbers) throw new UnsupportedOperationException("Plugin numbers are unavailable");
+            numbers.put(key, state);
+            numberMeta.put(key, metadata);
+        }
+        final Map<String, Double> numbers = new HashMap<>();
+        final Map<String, Map<String, Object>> numberMeta = new HashMap<>();
+        boolean noNumbers;
+        @Override public void updateSettings(Map<String, Object> values) { updates.add(new HashMap<>(values)); }
+        String status = "";
+        final Map<String, Boolean> switches = new HashMap<>();
+        final List<Map<String, Object>> updates = new ArrayList<>();
+        boolean noEntities;
+        @Override public void status(String message, boolean error) { status = message; }
         @Override public void showWindow(String title, String message, String buttonLabel) {}
         @Override public void hideWindow() {}
         @Override public void log(String message) {}
+    }
+
+    static void soundFade() {
+        check(new Config(Collections.emptyMap()).soundFade == 2, "sound fade is 2 s by default");
+        check(new Config(Collections.singletonMap("soundFade", 12)).soundFade == 12, "sound fade parses");
+        check(new Config(Collections.singletonMap("soundFade", 500)).soundFade == 60, "sound fade is capped");
+        long s = 1_000_000_000L, fade = 10 * s;
+        check(AudioOut.fadeGain(0, -1, fade, 1) == 0, "the fade in starts silent");
+        double early = AudioOut.fadeGain(2 * s, -1, fade, 1), mid = AudioOut.fadeGain(5 * s, -1, fade, 1);
+        check(early > 0 && early < mid && mid < 1, "the fade in grows: " + early + " " + mid);
+        check(AudioOut.fadeGain(10 * s, -1, fade, 1) == 1, "the fade in ends at full level");
+        check(AudioOut.fadeGain(60 * s, -1, fade, 1) == 1, "full level stays");
+        check(AudioOut.fadeGain(60 * s, 0, fade, 1) == 1, "the fade out starts at full level");
+        double out = AudioOut.fadeGain(60 * s, 5 * s, fade, 1);
+        check(out > 0 && out < 1, "the fade out falls: " + out);
+        check(AudioOut.fadeGain(60 * s, 10 * s, fade, 1) == 0, "the fade out ends silent");
+        check(AudioOut.fadeGain(3 * s, 0, fade, early) == early, "a stop during the fade in starts from its level");
+        check(AudioOut.fadeGain(0, -1, 0, 1) == 1 && AudioOut.fadeGain(0, 0, 0, 1) == 0, "no fade: on and off at once");
+
+        check(NightLightPlugin.fadeSeconds(1.4) == 1.5 && NightLightPlugin.fadeSeconds(99) == 60 && NightLightPlugin.fadeSeconds(-1) == 0, "fade snaps to 0.5 s in range");
+        FakeHost host = new FakeHost();
+        NightLightPlugin plugin = soundPlugin(host, new ArrayList<>(), Collections.emptyMap());
+        check(Double.valueOf(2).equals(host.numbers.get("fade")), "publishes the sound fade: " + host.numbers);
+        Map<String, Object> meta = host.numberMeta.get("fade");
+        check(meta != null && "s".equals(meta.get("unit")), "in seconds: " + meta);
+        plugin.onEvent("number.fade", Collections.singletonMap("value", 1.6));
+        check(Double.valueOf(1.5).equals(host.numbers.get("fade")), "Home Assistant's fade is applied on the step: " + host.numbers);
+        check(plugin.config().soundFade == 1.5, "and the sound uses it at once");
+        check(Double.valueOf(1.5).equals(lastSaved(host, "soundFade")), "and it is saved for a restart");
+        check(Double.valueOf(25).equals(host.numbers.get("volume")), "the volume stays: " + host.numbers);
+        plugin.stop();
     }
 
     static void check(boolean ok, String what) {

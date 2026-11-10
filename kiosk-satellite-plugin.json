@@ -10,7 +10,7 @@
   "description": "A bedtime night light for a child's room. As a screensaver it shows a dim warm night light. Press Soother for gentle sleepy music or sounds while the screen drifts through soft colours, which then fades back to the night light.",
   "author": "heazlewood",
   "license": "Apache-2.0",
-  "capabilities": ["screensaver", "screensaver.mode", "host.control", "host.read"],
+  "capabilities": ["screensaver", "screensaver.mode", "host.control", "host.read", "entities"],
   "icon": "icon.png",
   "settings": [
     {
@@ -159,6 +159,46 @@
       "description": "How loud the night light sound plays, separate from the soother, on top of the device's media volume."
     },
     {
+      "key": "keepSound",
+      "type": "boolean",
+      "title": "Keep sound when closed",
+      "default": false,
+      "group": "Night light",
+      "visibleWhen": { "key": "nightSound", "notEquals": "No sound" },
+      "description": "Keeps the sound playing after the screensaver closes, for example when the screen is touched or turns off. Stop night light sound or Close Night Light ends it."
+    },
+    {
+      "key": "soundOn",
+      "type": "boolean",
+      "title": "Sound on",
+      "default": false,
+      "group": "Night light",
+      "visibleWhen": { "key": "nightSound", "notEquals": "No sound" },
+      "description": "On while the sound plays without the screensaver. Turn it on or off here to play or stop the sound."
+    },
+    {
+      "key": "resumeSound",
+      "type": "boolean",
+      "title": "Resume sound after restart",
+      "default": false,
+      "group": "Night light",
+      "visibleWhen": { "key": "nightSound", "notEquals": "No sound" },
+      "description": "If the sound was on when the device or Kiosk Satellite restarted, for example after a power cut, plays it again."
+    },
+    {
+      "key": "soundFade",
+      "type": "number",
+      "title": "Sound fade",
+      "default": 2,
+      "min": 0,
+      "max": 60,
+      "step": 0.5,
+      "unit": "s",
+      "group": "Night light",
+      "visibleWhen": { "key": "nightSound", "notEquals": "No sound" },
+      "description": "Seconds the sound takes to fade in when it starts and to fade out when it stops. Also a number in Home Assistant."
+    },
+    {
       "key": "countdown",
       "type": "boolean",
       "title": "Bedtime countdown",
@@ -196,7 +236,7 @@
       "key": "nightLux",
       "type": "number",
       "title": "Light level",
-      "default": 5,
+      "default": 2,
       "min": 1,
       "max": 100,
       "step": 1,
@@ -240,6 +280,14 @@
     {
       "id": "toggleSleep",
       "title": "Start or end soother"
+    },
+    {
+      "id": "startSound",
+      "title": "Play night light sound"
+    },
+    {
+      "id": "stopSound",
+      "title": "Stop night light sound"
     },
     {
       "id": "stopNightLight",

@@ -34,13 +34,19 @@ Either way works:
 | **Start soother** | Starts the soother, showing the screensaver first if needed |
 | **End soother** | Fades the soother back to the night light over about 20 seconds |
 | **Start or end soother** | Starts the soother, or ends it if it is playing. Handy for a single clap gesture |
-| **Close Night Light** | Dismisses the screensaver and restores your usual one |
+| **Play night light sound** | Plays the night light sound without the screensaver, for a sound machine with the screen off |
+| **Stop night light sound** | Stops the sound, whatever started it |
+| **Close Night Light** | Dismisses the screensaver, restores your usual one and stops the sound |
 
 While the screensaver shows, a dim button in the bottom right corner switches between **Soother** and **End soother**. A single tap anywhere else does nothing, so little hands cannot close it by accident. **Double tap** to close the screensaver. A hint saying so shows for a few seconds after each touch.
 
 The button needs a Kiosk Satellite release that passes taps to plugin screensavers. On older releases there is no button and any tap closes the screensaver, so use a gesture such as a clap with the **Start or end soother** action instead.
 
 Each action can also be exposed to Home Assistant from the plugin page. You can then start the soother from a bedtime automation.
+
+The plugin also adds a **Night light sound** switch to Home Assistant. It shows whether the sound is playing, from the screensaver or on its own, and turns the sound on or off. It needs a Kiosk Satellite release with plugin entities.
+
+A **Night light volume** slider (0 to 100%, steps of 5) sets the **Night light volume** setting from Home Assistant, so an automation can turn the sound down without the device volume. It needs Kiosk Satellite 2026.11.14 or later; older releases just leave it out.
 
 ### Recommended Kiosk Satellite settings
 
@@ -49,6 +55,8 @@ Kiosk Satellite still controls when the screensaver starts and stops, so check t
 - **Turn off any screen-off timer** for the screensaver, or the night light goes dark when it fires.
 - **Screensaver brightness**: set a lowish panel brightness. The night light's own brightness setting dims it further.
 - **Motion wake**: turn it off, or someone moving in the room closes the screensaver.
+- **Sound with the screen off**: the sound normally stops when the screensaver closes. Turn on **Keep sound when closed**, or use the **Play night light sound** action, to keep it playing.
+- **Sound fade**: the sound fades in when it starts and out when it stops, over **Sound fade** seconds (0 for about a second). Home Assistant gets it as a number beside the volume, so an automation can wait for the fade to end.
 - **Media volume**: sound plays on the device's media volume. The plugin's **Soother volume** and **Night light volume** settings sit on top of that.
 
 ### Night mode
@@ -75,6 +83,10 @@ Tinting the widgets needs a Kiosk Satellite release with screensaver tints. On o
 | Night light | Night light brightness | 25% |
 | Night light | Night light sound | No sound |
 | Night light | Night light volume | 25% |
+| Night light | Keep sound when closed | Off |
+| Night light | Sound on | Off |
+| Night light | Resume sound after restart | Off |
+| Night light | Sound fade | 2 s |
 | Countdown | Bedtime countdown | Off |
 | Countdown | Bed time | 19:00 |
 | Countdown | Up time | 07:00 |
